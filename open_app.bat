@@ -19,6 +19,6 @@ echo Opening dashboard at http://localhost:8501
 echo Press Ctrl+C in this window to stop the app.
 echo.
 
-python -m streamlit run src\dashboard\app.py
+python -m streamlit run src\dashboard\app.py --server.headless=false
 
 pause
