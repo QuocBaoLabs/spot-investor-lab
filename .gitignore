@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+paper_trades.jsonl
+.streamlit/secrets.toml

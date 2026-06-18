@@ -1,0 +1,1 @@
+"""Spot investor research tools."""
