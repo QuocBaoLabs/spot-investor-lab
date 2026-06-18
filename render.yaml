@@ -1,0 +1,8 @@
+services:
+  - name: spot-investor-lab
+    type: web
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run src/dashboard/app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
