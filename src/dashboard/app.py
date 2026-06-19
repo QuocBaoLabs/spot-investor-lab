@@ -391,7 +391,7 @@ def load_symbol_universe() -> pd.DataFrame:
     return pd.DataFrame([item.__dict__ for item in symbols])
 
 
-@st.cache_data(ttl=60 * 60, show_spinner=False)
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def load_history(symbol: str, history_years: int | None) -> pd.DataFrame:
     return BinanceSpotClient().get_daily_klines(symbol, years=history_years)
 
@@ -927,8 +927,9 @@ def main() -> None:
     st.sidebar.markdown("## ⚙️ Thiết lập dữ liệu")
     history_label = st.sidebar.radio(
         "Phạm vi dữ liệu",
-        ["Từ khi niêm yết Binance", "2 năm gần nhất", "4 năm gần nhất", "8 năm gần nhất"],
+        ["2 năm gần nhất", "4 năm gần nhất", "8 năm gần nhất", "Từ khi niêm yết Binance"],
         index=0,
+        help="Mặc định để 2 năm gần nhất nhằm giảm số lượng request gọi tới Binance khi server mới khởi động (cold start).",
     )
     history_years = {
         "Từ khi niêm yết Binance": None,
@@ -940,8 +941,10 @@ def main() -> None:
     st.sidebar.markdown("### 🪙 Danh sách coin")
     selection_mode = st.sidebar.radio(
         "Cách chọn coin",
-        ["Top 50 Binance", "Top 100 Binance", "Tùy chọn"],
+        ["Tùy chọn", "Top 50 Binance", "Top 100 Binance"],
+        index=0,
         horizontal=False,
+        help="Mặc định dùng danh sách rút gọn để tránh dội quá nhiều request lên Binance khi server mới khởi động.",
     )
 
     if selection_mode == "Top 50 Binance":
@@ -1223,7 +1226,8 @@ def main() -> None:
     st.plotly_chart(scatter3d_fig(ranking), width="stretch")
 
     # ---------------- Heatmap mốc sự kiện (đã tách rõ + giải thích) ----------------
-    event_df = pd.concat([table for table in event_tables if not table.empty], ignore_index=True) if event_tables else pd.DataFrame()
+    non_empty_event_tables = [table for table in event_tables if not table.empty]
+    event_df = pd.concat(non_empty_event_tables, ignore_index=True) if non_empty_event_tables else pd.DataFrame()
     section_title("⚡", "Phản ứng quanh halving, downtrend lớn và thiên nga đen", anchor="moc-su-kien")
     st.markdown(
         """

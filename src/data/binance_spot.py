@@ -66,7 +66,7 @@ class BinanceSpotClient:
             if next_start >= now_ms or len(payload) < 1000:
                 break
             start_ms = next_start
-            time.sleep(0.04)
+            time.sleep(0.15)
 
         return self._klines_to_frame(rows)
 
