@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -11,10 +12,25 @@ import requests
 BINANCE_BASE_URL = "https://api.binance.com"
 WEIGHT_LIMIT_PER_MINUTE = 1200
 WEIGHT_SLOWDOWN_THRESHOLD = 0.65
+MIN_REQUEST_INTERVAL_SECONDS = 0.25
 
 
 class BinanceRateLimitBannedError(RuntimeError):
     """Raised when Binance temporarily bans this IP for sending too many requests (HTTP 418)."""
+
+
+class _RateLimitState:
+    """Module-level (shared across every BinanceSpotClient instance) pacing/ban state.
+
+    A fresh BinanceSpotClient() is created on every call site, so this state must live
+    outside any single instance to actually throttle requests across symbols/calls.
+    """
+
+    last_request_at: float = 0.0
+    banned_until: float = 0.0
+
+
+_rate_limit_state = _RateLimitState()
 
 
 @dataclass(frozen=True)
@@ -72,28 +88,66 @@ class BinanceSpotClient:
             if next_start >= now_ms or len(payload) < 1000:
                 break
             start_ms = next_start
-            time.sleep(0.15)
 
         return self._klines_to_frame(rows)
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        self._wait_for_ban_to_lift()
+        self._pace_request()
+
         response = requests.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
 
-        if response.status_code == 418:
-            retry_after = response.headers.get("Retry-After")
-            wait_text = f" Thử lại sau khoảng {retry_after} giây." if retry_after else " Thử lại sau vài chục phút."
-            raise BinanceRateLimitBannedError(
-                "Binance đã tạm chặn IP server này vì gửi quá nhiều request (HTTP 418)." + wait_text
-            )
-
-        if response.status_code == 429:
-            retry_after = float(response.headers.get("Retry-After", 2))
-            time.sleep(min(retry_after, 30))
+        if response.status_code in (418, 429):
+            ban_until = self._parse_ban_until(response)
+            if response.status_code == 418:
+                _rate_limit_state.banned_until = ban_until
+                wait_seconds = max(0, round(ban_until - time.time()))
+                raise BinanceRateLimitBannedError(
+                    "Binance đã tạm chặn IP server này vì gửi quá nhiều request (HTTP 418). "
+                    f"Thử lại sau khoảng {wait_seconds} giây."
+                )
+            # 429: short-lived "too many requests", just wait and retry once.
+            time.sleep(min(max(ban_until - time.time(), 1.0), 30.0))
+            self._pace_request()
             response = requests.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
 
         response.raise_for_status()
         self._throttle_if_near_limit(response)
         return response.json()
+
+    @staticmethod
+    def _pace_request() -> None:
+        now = time.time()
+        wait = _rate_limit_state.last_request_at + MIN_REQUEST_INTERVAL_SECONDS - now
+        if wait > 0:
+            time.sleep(wait)
+        _rate_limit_state.last_request_at = time.time()
+
+    @staticmethod
+    def _wait_for_ban_to_lift() -> None:
+        remaining = _rate_limit_state.banned_until - time.time()
+        if remaining > 0:
+            wait_seconds = round(remaining)
+            raise BinanceRateLimitBannedError(
+                f"Binance đang tạm chặn IP server này. Còn khoảng {wait_seconds} giây nữa mới gọi lại được."
+            )
+
+    @staticmethod
+    def _parse_ban_until(response: requests.Response) -> float:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return time.time() + float(retry_after)
+            except ValueError:
+                pass
+        try:
+            message = str(response.json().get("msg", ""))
+        except ValueError:
+            message = ""
+        match = re.search(r"until\s+(\d+)", message)
+        if match:
+            return int(match.group(1)) / 1000
+        return time.time() + 60.0
 
     @staticmethod
     def _throttle_if_near_limit(response: requests.Response) -> None:
