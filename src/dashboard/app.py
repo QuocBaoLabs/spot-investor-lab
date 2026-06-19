@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.data.binance_spot import BinanceSpotClient
+from src.data.binance_spot import BinanceRateLimitBannedError, BinanceSpotClient
 from src.indicators.macd import macd as calc_macd
 from src.indicators.rsi import rsi as calc_rsi
 from src.research.spot_analysis import (
@@ -920,6 +920,9 @@ def main() -> None:
     try:
         with st.spinner("🔄 Đang lấy danh sách coin spot từ Binance..."):
             universe = load_symbol_universe()
+    except BinanceRateLimitBannedError as exc:
+        st.error(f"⛔ {exc}")
+        st.stop()
     except requests.RequestException as exc:
         st.error(f"Không kết nối được Binance public API: {exc}")
         st.stop()
@@ -988,13 +991,25 @@ def main() -> None:
     errors: list[str] = []
     symbols_to_load = list(dict.fromkeys(selected + [btc_symbol]))
 
+    banned_error: BinanceRateLimitBannedError | None = None
     for index, symbol in enumerate(symbols_to_load, start=1):
         try:
             histories[symbol] = load_history(symbol, history_years)
+        except BinanceRateLimitBannedError as exc:
+            banned_error = exc
+            break
         except requests.RequestException as exc:
             errors.append(f"{symbol}: {exc}")
         progress.progress(index / len(symbols_to_load), text=f"Đã tải {index}/{len(symbols_to_load)} coin")
     progress.empty()
+
+    if banned_error is not None:
+        st.error(f"⛔ {banned_error}")
+        st.info(
+            f"Đã tải được {len(histories)}/{len(symbols_to_load)} coin trước khi bị chặn. "
+            "Hãy chọn ít coin hơn hoặc khung thời gian ngắn hơn ở thanh bên, rồi thử lại sau."
+        )
+        st.stop()
 
     if errors:
         with st.expander("Coin tải lỗi"):

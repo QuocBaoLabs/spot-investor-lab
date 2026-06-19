@@ -9,6 +9,12 @@ import requests
 
 
 BINANCE_BASE_URL = "https://api.binance.com"
+WEIGHT_LIMIT_PER_MINUTE = 1200
+WEIGHT_SLOWDOWN_THRESHOLD = 0.65
+
+
+class BinanceRateLimitBannedError(RuntimeError):
+    """Raised when Binance temporarily bans this IP for sending too many requests (HTTP 418)."""
 
 
 @dataclass(frozen=True)
@@ -72,8 +78,31 @@ class BinanceSpotClient:
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         response = requests.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
+
+        if response.status_code == 418:
+            retry_after = response.headers.get("Retry-After")
+            wait_text = f" Thử lại sau khoảng {retry_after} giây." if retry_after else " Thử lại sau vài chục phút."
+            raise BinanceRateLimitBannedError(
+                "Binance đã tạm chặn IP server này vì gửi quá nhiều request (HTTP 418)." + wait_text
+            )
+
+        if response.status_code == 429:
+            retry_after = float(response.headers.get("Retry-After", 2))
+            time.sleep(min(retry_after, 30))
+            response = requests.get(f"{self.base_url}{path}", params=params, timeout=self.timeout)
+
         response.raise_for_status()
+        self._throttle_if_near_limit(response)
         return response.json()
+
+    @staticmethod
+    def _throttle_if_near_limit(response: requests.Response) -> None:
+        used_weight = response.headers.get("X-MBX-USED-WEIGHT-1M")
+        if used_weight is None:
+            return
+        ratio = float(used_weight) / WEIGHT_LIMIT_PER_MINUTE
+        if ratio >= WEIGHT_SLOWDOWN_THRESHOLD:
+            time.sleep(min(0.5 + ratio, 3.0))
 
     @staticmethod
     def _klines_to_frame(rows: list[list[Any]]) -> pd.DataFrame:
